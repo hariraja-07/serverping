@@ -77,13 +77,25 @@ jobs:
 
       # Tags are derived from the event:
       #   push to main   -> main, latest, sha-<short>
-      #   tag v1.2.3     -> 1.2.3, 1.2, latest
+      #   tag v1.2.3     -> 1.2.3, 1.2, v1.2.3, latest
       #   anything else  -> sha-<short>
+      #
+      # This block is explicit on purpose. metadata-action's built-in defaults are only
+      # type=ref (branch/tag/pr) plus latest=auto — omit `tags` entirely and a release
+      # tag yields just `v1.2.3` and nothing records which commit an image came from.
+      # The comment above used to promise tags the workflow never produced; v0.1.0 is
+      # the release that exposed it.
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
 
       - name: Build and push
         uses: docker/build-push-action@v7

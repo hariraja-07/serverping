@@ -339,9 +339,10 @@ Every push to `main` builds and publishes to GitHub Container Registry:
 docker pull ghcr.io/hariraja-07/serverping:latest
 ```
 
-Tags: `latest` and `main` from `main`, `1.2.3` and `1.2` from a `v1.2.3` tag, plus `sha-<short>`
-on every build. `.github/workflows/docker.yml` gates the publish behind the test job, so a
-commit that breaks the 43 tests can never reach the registry.
+Tags are event-derived: a push to `main` publishes `main`, `latest` and `sha-<short>`; a tag
+`v0.1.0` publishes `0.1.0`, `0.1`, `v0.1.0` and `latest`. `.github/workflows/docker.yml` gates
+the publish behind the test job, so a commit that breaks the 43 tests can never reach the
+registry.
 
 ---
 
