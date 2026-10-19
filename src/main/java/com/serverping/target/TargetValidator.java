@@ -44,13 +44,14 @@ public class TargetValidator {
     }
 
     /**
-     * Why a given address is refused.
+     * Why a given address is refused. Instance method rather than static so {@link CheckService}
+     * can take the very same policy by injection — and tests can substitute it.
      *
      * <p>{@code InetAddress} covers loopback, link-local (which includes the
      * {@code 169.254.169.254} cloud metadata endpoint), RFC1918 site-local and multicast for
      * free; the explicit byte checks below cover the blocks its predicates do not.
      */
-    static boolean isBlocked(InetAddress address) {
+    public boolean isBlocked(InetAddress address) {
         if (address.isAnyLocalAddress()) {
             return true;                                    // 0.0.0.0, ::
         }

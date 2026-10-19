@@ -1,5 +1,6 @@
 package com.serverping.target;
 
+import java.time.Instant;
 import java.util.List;
 
 import org.springframework.data.domain.Sort;
@@ -18,10 +19,13 @@ public class TargetService {
 
     private final TargetRepository targetRepository;
     private final TargetValidator targetValidator;
+    private final CheckService checkService;
 
-    public TargetService(TargetRepository targetRepository, TargetValidator targetValidator) {
+    public TargetService(TargetRepository targetRepository, TargetValidator targetValidator,
+                         CheckService checkService) {
         this.targetRepository = targetRepository;
         this.targetValidator = targetValidator;
+        this.checkService = checkService;
     }
 
     @Transactional
@@ -70,6 +74,35 @@ public class TargetService {
     @Transactional
     public void delete(long id) {
         targetRepository.delete(find(id));
+    }
+
+    /**
+     * Probe one target immediately instead of waiting for the background scheduler, and fold
+     * the result back into the target's observed state.
+     *
+     * <p>A disabled target is still probed when asked explicitly: disabling controls whether the
+     * <em>scheduler</em> visits it, and refusing a deliberate request would just be surprising.
+     *
+     * <p>{@code consecutiveFails} resets to zero on success so callers can distinguish a single
+     * blip (flapping) from a sustained outage.
+     */
+    @Transactional
+    public CheckResponse checkNow(long id) {
+        Target target = find(id);
+
+        CheckResult result = checkService.check(target.getHost(), target.getPort());
+        Instant checkedAt = Instant.now();
+
+        target.setStatus(result.status());
+        target.setLatencyMs(result.latencyMs());
+        target.setLastCheckedAt(checkedAt);
+        target.setConsecutiveFails(result.status() == Status.UP
+                ? 0
+                : target.getConsecutiveFails() + 1);
+        targetRepository.save(target);
+
+        return new CheckResponse(target.getId(), result.status(), result.latencyMs(),
+                result.detail(), checkedAt);
     }
 
     private Target find(long id) {
