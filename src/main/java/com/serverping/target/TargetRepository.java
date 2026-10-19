@@ -12,4 +12,7 @@ public interface TargetRepository extends JpaRepository<Target, Long> {
 
     /** Targets the background scheduler should visit. */
     List<Target> findByEnabledTrue();
+
+    /** Backing query for {@code GET /api/v1/targets?status=...}. */
+    List<Target> findByStatus(Status status);
 }

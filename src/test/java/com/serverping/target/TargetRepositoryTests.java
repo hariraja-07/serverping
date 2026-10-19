@@ -12,12 +12,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 /**
  * Boot 4 no longer ships {@code @DataJpaTest} in the webmvc test starter, so this exercises
- * the repository through the full application context against an in-memory database.
+ * the repository through the full application context. Database config comes from
+ * {@code src/test/resources/application.properties} (in-memory H2), shared with the
+ * controller tests so only one application context is ever started.
  */
-@SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:targettest;DB_CLOSE_DELAY=-1",
-        "spring.jpa.hibernate.ddl-auto=create-drop"
-})
+@SpringBootTest
 class TargetRepositoryTests {
 
     @Autowired
