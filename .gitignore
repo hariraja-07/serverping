@@ -1,5 +1,8 @@
 HELP.md
 target/
+
+# H2 file database created at runtime (./data/serverping.mv.db)
+data/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

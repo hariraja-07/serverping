@@ -47,10 +47,10 @@
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
 
-		<!-- JdbcTemplate + DataSource auto-configuration -->
+		<!-- JPA entities + Spring Data repositories (includes starter-jdbc) -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-jdbc</artifactId>
+			<artifactId>spring-boot-starter-data-jpa</artifactId>
 		</dependency>
 
 		<!-- Embedded file-backed database (data survives restart) -->
