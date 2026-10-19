@@ -41,8 +41,11 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # No test count in this name. A hardcoded number here has to be edited every time a test is
+  # added, and the failure mode is a job silently advertising a count that stopped being true —
+  # the same class of bug as the tag-derivation comment that documented tags nothing produced.
+  # The count lives in the README, where it is read by humans who notice.
   test:
-    name: test (43)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

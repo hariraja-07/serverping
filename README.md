@@ -232,6 +232,10 @@ internet.
 | `app.check-interval` | `60000` | Background sweep interval |
 | `app.check-initial-delay` | `5000` | Delay before the first sweep |
 | `app.scheduler.enabled` | `true` | Turn background probing off entirely |
+| `app.retention.enabled` | `true` | Turn background pruning off entirely |
+| `app.retention.days` | `30` | Delete check history older than this. `0` or less keeps everything |
+| `app.retention.interval-ms` | `3600000` | How often the prune runs (hourly) |
+| `app.retention.initial-delay-ms` | `60000` | Grace period before the first prune, so migrations land first |
 | `spring.datasource.url` | `jdbc:postgresql://localhost:5432/serverping` | Where targets and history live |
 | `spring.datasource.username` / `.password` | `serverping` / `serverping` | Database credentials |
 | `spring.jpa.hibernate.ddl-auto` | `validate` | Hibernate only *checks* the schema — Flyway owns it |
@@ -252,7 +256,7 @@ java -jar target/serverping-0.1.0.jar \
 ## Build and test
 
 ```bash
-./mvnw clean test     # 43 tests — in-memory H2, nothing external needed
+./mvnw clean test     # 48 tests — in-memory H2, nothing external needed
 ./mvnw package        # target/serverping-0.1.0.jar (executable, self-contained)
 docker compose up -d db                                  # PostgreSQL for the app
 java -jar target/serverping-0.1.0.jar
@@ -344,7 +348,7 @@ Tags are event-derived: a push to `main` publishes `main` and `sha-<short>`; a r
 *release*, not the branch — with `latest=auto` a branch build deliberately does not move it,
 so pointing consumers at `latest` always gets the last tagged release rather than an
 arbitrary commit. `.github/workflows/docker.yml` gates the publish behind the test job, so a
-commit that breaks the 43 tests can never reach the registry.
+commit that breaks the test suite can never reach the registry.
 
 ---
 
@@ -357,7 +361,8 @@ later as a broken query against a column that moved.
 Migrations live in `src/main/resources/db/migration` and run automatically on boot:
 
 ```
-V1__init.sql     target + target_check
+V1__init.sql              target + target_check
+V2__history_indexes.sql   indexes for history reads and for retention deletes
 ```
 
 `V1__init.sql` was not hand-written. Hibernate was pointed at an empty PostgreSQL with
@@ -370,13 +375,37 @@ To change the schema, add a new file — never edit an applied one, because Flyw
 checksums and will refuse to start:
 
 ```bash
-touch src/main/resources/db/migration/V2__add_something.sql
+touch src/main/resources/db/migration/V3__add_something.sql
 ```
 
 Version, then two underscores, then a description. Flyway applies it on the next boot.
 
 Note there is **no foreign key** from `target_check.target_id` to `target.id`: history is meant
 to outlive the target it belongs to, so deleting a target must not delete its check rows.
+
+### Retention
+
+History would otherwise grow forever: every sweep appends one row per enabled target, which at
+the default 60s interval is **1,440 rows per target per day** — around half a million a year.
+
+`RetentionSweeper` deletes rows older than `app.retention.days` (default 30) in the background,
+hourly. Each delete is a range scan against `idx_target_check_checked_at`, so it stays small and
+the table never drifts far from its steady-state size. A daily job would do the same total work
+in one spike and let the table grow an extra day in between. An hourly log line saying "deleted
+0 rows" would tell nobody anything, so it stays silent when there is nothing to do:
+
+```
+INFO RetentionSweeper : Pruned 1 check row(s) older than 30 day(s)
+   (before 2026-09-19T17:39:52Z)
+```
+
+Set `app.retention.days=0`, or `app.retention.enabled=false`, to keep everything forever — that
+is an explicit supported setting, not a misconfiguration that quietly looks like the feature is
+broken. Because there is no foreign key, retention is also the **only** thing that removes rows:
+an orphaned history belonging to a deleted target is still pruned.
+
+The second index in `V2` exists for this. Without it each prune would be a full scan of the
+very table it is trying to keep small.
 
 ### Backing up and restoring
 
@@ -412,6 +441,7 @@ docker-compose.yml               db + serverping, named volume `pgdata`
 src/main/resources/
   application.properties         Postgres, Flyway on, ddl-auto=validate
   db/migration/V1__init.sql      target + target_check
+  db/migration/V2__history_indexes.sql   indexes for history reads and retention
 
 src/main/java/com/serverping/
   ServerpingApplication.java     entry point, @EnableScheduling
@@ -430,6 +460,7 @@ src/main/java/com/serverping/
     CheckController.java         /check and /checks
     SummaryController.java       /summary
     Scheduler.java               background sweep
+    RetentionSweeper.java        prunes history older than app.retention.days
     Status.java, Protocol.java   UP|DOWN|UNKNOWN, TCP
 ```
 
@@ -439,7 +470,6 @@ src/main/java/com/serverping/
 
 - **Authentication** — the API is unauthenticated; keep it on loopback or behind a proxy.
 - **`protocol: HTTP`** — status-code and TLS-certificate checks.
-- **Retention** — history grows forever; nothing prunes old `target_check` rows.
 
 ## License
 
