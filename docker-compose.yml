@@ -1,0 +1,52 @@
+# Pinned so the volume is always `serverping_pgdata`. Without this the project name defaults
+# to the directory name, so cloning elsewhere would silently start an EMPTY database.
+name: serverping
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-serverping}
+      POSTGRES_USER: ${POSTGRES_USER:-serverping}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-serverping}
+    volumes:
+      # Named volume rather than the container's writable layer. `docker compose down` keeps
+      # it; `down -v` is the command that destroys it. Without this, every `down` would
+      # delete the database along with the container.
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # 127.0.0.1 only: ./mvnw spring-boot:run on the host needs this, but publishing it as
+      # 0.0.0.0:5432 would hand your database to the LAN — and nothing here needs it remotely.
+      # The serverping service reaches Postgres over the compose network regardless.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # $$ so compose passes the literal $POSTGRES_USER through for the shell to expand —
+      # if the credentials are overridden in .env the check follows them.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  serverping:
+    build: .
+    # Same name as the tag we push to GHCR, so a local build replaces a pulled image cleanly.
+    image: ghcr.io/hariraja-07/serverping:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        # service_healthy, not just service_started: Spring would otherwise attempt a
+        # connection before postgres accepts them and crash-loop until it won.
+        condition: service_healthy
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    environment:
+      # Relaxed binding maps these onto spring.datasource.* — the image itself never has
+      # to know which database it is pointed at.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-serverping}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-serverping}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-serverping}
+
+volumes:
+  pgdata:

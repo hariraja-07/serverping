@@ -37,3 +37,6 @@ build/
 
 # graphify knowledge graph — generated locally by `graphify update .`
 graphify-out/
+
+# Local compose secrets — never commit real credentials
+.env

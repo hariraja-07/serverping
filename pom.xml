@@ -53,11 +53,33 @@
 			<artifactId>spring-boot-starter-data-jpa</artifactId>
 		</dependency>
 
-		<!-- Embedded file-backed database (data survives restart) -->
+		<!-- Postgres is the runtime datastore. Version managed by Boot. -->
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- Versioned schema migrations; replaces hibernate's ddl-auto for the runtime schema.
+		     Boot 4 ships this as its own starter (spring-boot-flyway does the auto-configuration). -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-flyway</artifactId>
+		</dependency>
+
+		<!-- Flyway 10+ moved database support out of flyway-core: without this module Flyway
+		     starts happily and then cannot talk to PostgreSQL at all. -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- Test-only: the suite runs on in-memory H2 so it needs no external service. -->
 		<dependency>
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>
-			<scope>runtime</scope>
+			<scope>test</scope>
 		</dependency>
 
 		<dependency>
