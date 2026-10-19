@@ -3,9 +3,45 @@
 A small HTTP API that watches TCP services and tells you whether they are accepting
 connections — and how long they take to answer.
 
-Built with **Java 17** and **Spring Boot 4.0.6**.
+Built with **Java 17** and **Spring Boot 4.0.6**, backed by **PostgreSQL 17**, with
+**Flyway** owning the schema.
+
+## Quick start
+
+Two ways in. Docker Compose is the shorter one and needs nothing installed but Docker.
+
+### With Docker Compose
 
 ```bash
+git clone https://github.com/hariraja-07/serverping.git
+cd serverping
+cp .env.example .env        # defaults are fine for local use
+docker compose up -d
+curl localhost:8080/actuator/health
+```
+
+That starts PostgreSQL and the service, waits for the database to pass `pg_isready` before
+starting the app, and applies migrations on boot. `application.properties` binds to
+`127.0.0.1`, but the image deliberately sets `SERVER_ADDRESS=0.0.0.0` — inside a container
+loopback would mean Docker's published port reaches nothing. The container boundary is the
+isolation here, so **do not publish 8080 to the internet**: there is no authentication.
+
+Prefer the published image over building from source?
+
+```bash
+docker pull ghcr.io/hariraja-07/serverping:latest
+docker compose up -d
+```
+
+(`up -d` builds rather than pulls when `build:` is present and no image exists locally, so
+pull first if you want the prebuilt one.)
+
+### Running from source
+
+PostgreSQL has to be reachable first — the containerised database is the easy way:
+
+```bash
+docker compose up -d db
 ./mvnw spring-boot:run
 ```
 
@@ -176,6 +212,12 @@ Two deliberate limitations:
 until you deliberately open it. There is **no authentication** yet: set `server.address=0.0.0.0`
 only alongside a reverse proxy, a firewall, or a tunnel.
 
+The Docker image is the exception — it sets `ENV SERVER_ADDRESS=0.0.0.0`, because a container
+bound to loopback makes Docker's published port unreachable with no error anywhere, just
+`connection refused` from the host. Inside a container the container boundary is the
+isolation, which is fine on a single machine and is **not** a reason to publish 8080 to the
+internet.
+
 ---
 
 ## Configuration
@@ -190,7 +232,10 @@ only alongside a reverse proxy, a firewall, or a tunnel.
 | `app.check-interval` | `60000` | Background sweep interval |
 | `app.check-initial-delay` | `5000` | Delay before the first sweep |
 | `app.scheduler.enabled` | `true` | Turn background probing off entirely |
-| `spring.datasource.url` | `jdbc:h2:file:./data/serverping` | Where targets and history live |
+| `spring.datasource.url` | `jdbc:postgresql://localhost:5432/serverping` | Where targets and history live |
+| `spring.datasource.username` / `.password` | `serverping` / `serverping` | Database credentials |
+| `spring.jpa.hibernate.ddl-auto` | `validate` | Hibernate only *checks* the schema — Flyway owns it |
+| `spring.flyway.enabled` | `true` (default) | Runs `src/main/resources/db/migration` on boot |
 
 Override anything on the command line:
 
@@ -207,10 +252,15 @@ java -jar target/serverping-0.0.1-SNAPSHOT.jar \
 ## Build and test
 
 ```bash
-./mvnw clean test     # 43 tests
+./mvnw clean test     # 43 tests — in-memory H2, nothing external needed
 ./mvnw package        # target/serverping-0.0.1-SNAPSHOT.jar (executable, self-contained)
+docker compose up -d db                                  # PostgreSQL for the app
 java -jar target/serverping-0.0.1-SNAPSHOT.jar
 ```
+
+Only `clean test` and `package` work on their own. Running the application needs a reachable
+PostgreSQL, because `application.properties` points at `localhost:5432` — `docker compose up
+-d db` is the quickest way to have one.
 
 Tests run against in-memory H2 (`src/test/resources/application.properties`) with the scheduler
 disabled, so a background sweep cannot race an assertion. The SSRF policy is substituted in
@@ -219,9 +269,147 @@ binds to.
 
 ---
 
+## Docker
+
+```bash
+docker compose up -d --build   # build the image and start everything
+docker compose ps              # both services should report healthy
+docker compose logs -f serverping
+```
+
+`docker-compose.yml` defines two services:
+
+| Service | Image | Purpose |
+|---|---|---|
+| `db` | `postgres:17` | The datastore, on a named volume |
+| `serverping` | built from `Dockerfile` | The API, started only once `db` reports healthy |
+
+Credentials come from `.env` (copy `.env.example`), and `docker compose` reads it
+automatically. `.env` is gitignored — `.env.example` is what gets committed, so keep only
+placeholders there. The same file also publishes the host ports:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | `serverping` ×3 | Database name and credentials |
+| `SERVER_PORT` | `8080` | Host port the API is published on |
+| `POSTGRES_PORT` | `5432` | Host port for the database, **bound to `127.0.0.1` only** |
+
+The app is passed `SPRING_DATASOURCE_URL` / `_USERNAME` / `_PASSWORD`, which Spring's relaxed
+binding maps onto `spring.datasource.*`. The image therefore never has to know which database
+it is pointed at.
+
+### Your data is in a volume, not in the container
+
+`db` stores everything in the named volume `serverping_pgdata`. This is the distinction that
+matters most:
+
+```bash
+docker compose down      # stops and deletes the containers — your DATA SURVIVES
+docker compose up -d     # fresh containers, same data, schema already migrated
+docker compose down -v   # DESTRUCTIVE: -v removes the volume. This is the delete command.
+```
+
+`docker compose down` destroys the containers' writable layers, so anything stored inside a
+container is lost with it. That is exactly why the database uses a volume — it is the part
+that is supposed to survive. `down -v` is the command that deliberately does not.
+
+The project name is pinned with `name: serverping` at the top of the file. Without it Compose
+falls back to the directory name, so cloning the repo to a different folder would silently
+start an *empty* database while your real data sat untouched in an orphaned volume.
+
+### The image itself
+
+- `eclipse-temurin:17-jre-jammy` — **glibc, not Alpine**. serverping resolves hostnames for a
+  living, and musl's resolver handles search domains and `ndots` differently from glibc. For
+  a network monitor, ~80 MB is not worth occasionally not finding a host.
+- Runs as a non-root user (`serverping`, uid 1001). Nothing here needs a capability — TCP
+  connects to high ports are unprivileged.
+- No data directory in the image at all. Persistence moved to PostgreSQL, so the
+  root-owned-volume question that usually comes with a database container does not arise.
+- `-XX:MaxRAMPercentage=75` instead of a fixed `-Xmx`, so the JVM sizes its heap against the
+  cgroup rather than the whole machine and getting OOM-killed at random.
+- A `HEALTHCHECK` that hits `/actuator/health` with `curl`, which gives a real verdict rather
+  than merely noticing that a socket is open.
+
+### Published image
+
+Every push to `main` builds and publishes to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/hariraja-07/serverping:latest
+```
+
+Tags: `latest` and `main` from `main`, `1.2.3` and `1.2` from a `v1.2.3` tag, plus `sha-<short>`
+on every build. `.github/workflows/docker.yml` gates the publish behind the test job, so a
+commit that breaks the 43 tests can never reach the registry.
+
+---
+
+## Database and migrations
+
+Flyway owns the schema; Hibernate only checks that what Flyway built still matches the
+entities (`ddl-auto=validate`). A mismatch therefore fails at startup instead of surfacing
+later as a broken query against a column that moved.
+
+Migrations live in `src/main/resources/db/migration` and run automatically on boot:
+
+```
+V1__init.sql     target + target_check
+```
+
+`V1__init.sql` was not hand-written. Hibernate was pointed at an empty PostgreSQL with
+`ddl-auto=update`, `pg_dump --schema-only` captured the DDL it produced, and those statements
+were transcribed. Guessing whether an `Instant` maps to `timestamp(6)` or
+`timestamp(6) with time zone` is exactly how you end up debugging a type mismatch at startup
+instead of shipping.
+
+To change the schema, add a new file — never edit an applied one, because Flyway checks
+checksums and will refuse to start:
+
+```bash
+touch src/main/resources/db/migration/V2__add_something.sql
+```
+
+Version, then two underscores, then a description. Flyway applies it on the next boot.
+
+Note there is **no foreign key** from `target_check.target_id` to `target.id`: history is meant
+to outlive the target it belongs to, so deleting a target must not delete its check rows.
+
+### Backing up and restoring
+
+```bash
+# backup
+docker compose exec db pg_dump -U serverping serverping > backup.sql
+
+# restore
+docker compose exec -T db psql -U serverping serverping < backup.sql
+```
+
+To move the data somewhere else entirely, `docker compose down -v` and point a fresh volume
+at a restored dump. The schema comes from the dump *and* from Flyway — Flyway sees the
+`flyway_schema_history` table in the dump and leaves it alone.
+
+### Tests do not touch PostgreSQL
+
+The 43-test suite runs on in-memory H2 with Flyway disabled
+(`src/test/resources/application.properties`). H2 is `<scope>test</scope>` in `pom.xml`,
+nothing external has to be running, and the CI test job stays dependency-free — which is the
+reason it completes in well under a minute.
+
+---
+
 ## Layout
 
 ```
+Dockerfile                       multi-stage: maven build -> JRE runtime
+docker-compose.yml               db + serverping, named volume `pgdata`
+.env.example                     credentials template (.env is gitignored)
+.github/workflows/docker.yml     test -> build -> publish to GHCR
+
+src/main/resources/
+  application.properties         Postgres, Flyway on, ddl-auto=validate
+  db/migration/V1__init.sql      target + target_check
+
 src/main/java/com/serverping/
   ServerpingApplication.java     entry point, @EnableScheduling
   ApiExceptionHandler.java       every failure -> problem+json
@@ -249,7 +437,6 @@ src/main/java/com/serverping/
 - **Authentication** — the API is unauthenticated; keep it on loopback or behind a proxy.
 - **`protocol: HTTP`** — status-code and TLS-certificate checks.
 - **Retention** — history grows forever; nothing prunes old `target_check` rows.
-- **Container image** — no `Dockerfile` yet.
 
 ## License
 
