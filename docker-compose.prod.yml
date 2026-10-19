@@ -1,0 +1,63 @@
+# Run the published image — no source tree, no build step.
+#
+#   cp .env.example .env          # set a real POSTGRES_PASSWORD
+#   docker login ghcr.io          # the package is private, so this is required
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#   curl localhost:8080/actuator/health
+#
+# Three deliberate differences from docker-compose.yml:
+#
+#   1. `image:` only — no `build:`. On a machine without the repo, `build: .` has no
+#      Dockerfile to find and fails. Here the image comes from GHCR instead.
+#   2. The API binds 127.0.0.1, not 0.0.0.0. Nothing in this service authenticates, so
+#      exposing it means anyone who reaches the port owns your target list and can make
+#      your machine dial out on their behalf. Loopback keeps it to you; put a reverse
+#      proxy with auth in front when you deliberately want it reachable.
+#   3. Postgres publishes no port at all. The 127.0.0.1:5432 mapping exists solely so
+#      `./mvnw spring-boot:run` can reach the database from the host — that is the dev
+#      file's job, and on a deployed box it is one more thing that could be reached.
+#
+# Shares `name: serverping` with docker-compose.yml on purpose: same project means the
+# same pgdata volume, so your data is identical whether the app was built from source or
+# pulled from the registry. The two files are alternative modes, not two running stacks —
+# both want port 8080 and the same volume, so stop one before starting the other.
+#
+# Update the image with `docker compose -f docker-compose.prod.yml pull && ... up -d`.
+
+name: serverping
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-serverping}
+      POSTGRES_USER: ${POSTGRES_USER:-serverping}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-serverping}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Deliberately no `ports:` — see note 3 above.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  serverping:
+    image: ghcr.io/hariraja-07/serverping:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Loopback only. SERVER_PORT is still overridable if 8080 is taken locally.
+      - "127.0.0.1:${SERVER_PORT:-8080}:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-serverping}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-serverping}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-serverping}
+
+volumes:
+  pgdata:

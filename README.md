@@ -244,7 +244,7 @@ internet.
 Override anything on the command line:
 
 ```bash
-java -jar target/serverping-0.1.0.jar \
+java -jar target/serverping-0.1.1.jar \
   --server.port=9090 --app.check-interval=15000
 ```
 
@@ -257,9 +257,9 @@ java -jar target/serverping-0.1.0.jar \
 
 ```bash
 ./mvnw clean test     # 48 tests — in-memory H2, nothing external needed
-./mvnw package        # target/serverping-0.1.0.jar (executable, self-contained)
+./mvnw package        # target/serverping-0.1.1.jar (executable, self-contained)
 docker compose up -d db                                  # PostgreSQL for the app
-java -jar target/serverping-0.1.0.jar
+java -jar target/serverping-0.1.1.jar
 ```
 
 Only `clean test` and `package` work on their own. Running the application needs a reachable
@@ -344,7 +344,7 @@ docker pull ghcr.io/hariraja-07/serverping:latest
 ```
 
 Tags are event-derived: a push to `main` publishes `main` and `sha-<short>`; a release tag
-`v0.1.0` publishes `0.1.0`, `0.1`, `v0.1.0` and `latest`. Note that `latest` follows the
+`v0.1.1` publishes `0.1.1`, `0.1`, `v0.1.1` and `latest`. Note that `latest` follows the
 *release*, not the branch — with `latest=auto` a branch build deliberately does not move it,
 so pointing consumers at `latest` always gets the last tagged release rather than an
 arbitrary commit. `.github/workflows/docker.yml` gates the publish behind the test job, so a
