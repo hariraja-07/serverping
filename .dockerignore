@@ -1,0 +1,31 @@
+# NOTE: .dockerignore does NOT read .gitignore. Anything git ignores still reaches the build
+# context unless it is listed here too — including .env, which is exactly the file you would
+# least like copied into an image.
+
+# Rebuilt inside the image; never copy a host build in.
+target/
+
+# Secrets — must not enter the build context at all.
+.env
+
+# Not part of the application:
+data/
+graphify-out/
+.git/
+.github/
+.gitignore
+.gitattributes
+docker-compose.yml
+.env.example
+Dockerfile
+*.log
+README.md
+HELP.md
+
+# Tests run in CI via ./mvnw clean verify, not inside the image. Excluding them also means
+# mvn -Dmaven.test.skip=true has nothing to compile — using -DskipTests alone would still
+# compile tests and fail on the missing directory.
+src/test/
+.mvn/
+mvnw
+mvnw.cmd
