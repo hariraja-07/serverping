@@ -240,7 +240,7 @@ internet.
 Override anything on the command line:
 
 ```bash
-java -jar target/serverping-0.0.1-SNAPSHOT.jar \
+java -jar target/serverping-0.1.0.jar \
   --server.port=9090 --app.check-interval=15000
 ```
 
@@ -253,9 +253,9 @@ java -jar target/serverping-0.0.1-SNAPSHOT.jar \
 
 ```bash
 ./mvnw clean test     # 43 tests — in-memory H2, nothing external needed
-./mvnw package        # target/serverping-0.0.1-SNAPSHOT.jar (executable, self-contained)
+./mvnw package        # target/serverping-0.1.0.jar (executable, self-contained)
 docker compose up -d db                                  # PostgreSQL for the app
-java -jar target/serverping-0.0.1-SNAPSHOT.jar
+java -jar target/serverping-0.1.0.jar
 ```
 
 Only `clean test` and `package` work on their own. Running the application needs a reachable

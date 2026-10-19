@@ -10,7 +10,7 @@
 	</parent>
 	<groupId>com.serverping</groupId>
 	<artifactId>serverping</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
+	<version>0.1.0</version>
 	<name>serverping</name>
 	<description>Server ping monitoring service</description>
 	<url/>
