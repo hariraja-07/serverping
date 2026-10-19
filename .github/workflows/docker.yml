@@ -1,0 +1,101 @@
+# Builds the image and publishes it to GHCR.
+#
+# Two jobs on purpose. The publish job is gated behind `test`, so a commit that breaks the
+# 43-test suite can never ship an image. Building the tests into the image instead would not
+# work either: .dockerignore deliberately excludes src/test/ so the image context stays
+# small and deterministic.
+#
+# Publishing uses the workflow's own GITHUB_TOKEN rather than a personal token. It expires
+# with the run, needs no secret to be stored anywhere, and — the part that actually matters
+# here — GitHub connects the package to this repository on the first push from Actions. A
+# push done with a PAT does not do that, which is why the image pushed locally earlier shows
+# no "Connected repositories" until someone clicks it.
+
+name: docker
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    # Without this, editing the README would trigger a full image build. If this file is
+    # changed, it is listed below so workflow edits are still exercised.
+    paths:
+      - 'src/**'
+      - 'pom.xml'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/docker.yml'
+  # Manual runs ignore `paths`, which is what you want when testing the workflow itself.
+  workflow_dispatch:
+
+# Least privilege the jobs actually need. contents:read is for checkout; packages:write is
+# the only reason this can push to ghcr.io at all.
+permissions:
+  contents: read
+  packages: write
+
+# A newer push to the same branch supersedes this run. Never do that for main — each push
+# there publishes an image, and cancelling mid-push leaves a half-uploaded version behind.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: test (43)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          # Restores ~/.m2 from the cache keyed on pom.xml, so the suite does not re-download
+          # Spring Boot on every commit. The suite runs on in-memory H2 (test scope) and
+          # needs no services, which is exactly why it can stay this cheap.
+          cache: maven
+
+      - name: Run tests
+        run: ./mvnw -B clean verify
+
+  build:
+    name: build and push
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tags are derived from the event:
+      #   push to main   -> main, latest, sha-<short>
+      #   tag v1.2.3     -> 1.2.3, 1.2, latest
+      #   anything else  -> sha-<short>
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          # amd64 only. Adding arm64 needs QEMU emulation, which roughly triples build time
+          # and is not worth it until something actually runs these images on arm.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Reuse and update the layer cache across runs, so an unchanged Dockerfile does
+          # not re-run Maven's dependency download (~3 minutes) on every commit.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
