@@ -76,9 +76,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Tags are derived from the event:
-      #   push to main   -> main, latest, sha-<short>
+      #   push to main   -> main, sha-<short>        (latest is NOT moved here)
       #   tag v1.2.3     -> 1.2.3, 1.2, v1.2.3, latest
       #   anything else  -> sha-<short>
+      #
+      # latest=auto below only emits `latest` for semver/pep440/schedule events, so an
+      # ordinary commit to main cannot move it. Consumers pinned at :latest therefore get
+      # the last tagged release rather than whatever happened to build an hour ago.
       #
       # This block is explicit on purpose. metadata-action's built-in defaults are only
       # type=ref (branch/tag/pr) plus latest=auto — omit `tags` entirely and a release

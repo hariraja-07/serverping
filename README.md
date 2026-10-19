@@ -339,10 +339,12 @@ Every push to `main` builds and publishes to GitHub Container Registry:
 docker pull ghcr.io/hariraja-07/serverping:latest
 ```
 
-Tags are event-derived: a push to `main` publishes `main`, `latest` and `sha-<short>`; a tag
-`v0.1.0` publishes `0.1.0`, `0.1`, `v0.1.0` and `latest`. `.github/workflows/docker.yml` gates
-the publish behind the test job, so a commit that breaks the 43 tests can never reach the
-registry.
+Tags are event-derived: a push to `main` publishes `main` and `sha-<short>`; a release tag
+`v0.1.0` publishes `0.1.0`, `0.1`, `v0.1.0` and `latest`. Note that `latest` follows the
+*release*, not the branch — with `latest=auto` a branch build deliberately does not move it,
+so pointing consumers at `latest` always gets the last tagged release rather than an
+arbitrary commit. `.github/workflows/docker.yml` gates the publish behind the test job, so a
+commit that breaks the 43 tests can never reach the registry.
 
 ---
 
