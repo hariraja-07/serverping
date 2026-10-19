@@ -3,6 +3,7 @@ package com.serverping.target;
 import java.time.Instant;
 import java.util.List;
 
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,12 +19,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class TargetService {
 
     private final TargetRepository targetRepository;
+    private final CheckRepository checkRepository;
     private final TargetValidator targetValidator;
     private final CheckService checkService;
 
-    public TargetService(TargetRepository targetRepository, TargetValidator targetValidator,
-                         CheckService checkService) {
+    public TargetService(TargetRepository targetRepository, CheckRepository checkRepository,
+                         TargetValidator targetValidator, CheckService checkService) {
         this.targetRepository = targetRepository;
+        this.checkRepository = checkRepository;
         this.targetValidator = targetValidator;
         this.checkService = checkService;
     }
@@ -101,8 +104,58 @@ public class TargetService {
                 : target.getConsecutiveFails() + 1);
         targetRepository.save(target);
 
-        return new CheckResponse(target.getId(), result.status(), result.latencyMs(),
-                result.detail(), checkedAt);
+        // History is written in the same transaction as the target update, so a probe is never
+        // recorded twice or half-way. This is what survives a restart, where Target only keeps
+        // the latest result.
+        Check record = checkRepository.save(new Check(target.getId(), result.status(),
+                result.latencyMs(), result.detail(), checkedAt));
+
+        return new CheckResponse(record.getId(), target.getId(), result.status(),
+                result.latencyMs(), result.detail(), checkedAt);
+    }
+
+    /** Most recent probes for one target, newest first. 404s if the target does not exist. */
+    @Transactional(readOnly = true)
+    public List<CheckResponse> history(long targetId, int limit) {
+        find(targetId);
+
+        return checkRepository
+                .findByTargetIdOrderByIdDesc(targetId, PageRequest.of(0, limit))
+                .stream()
+                .map(check -> new CheckResponse(check.getId(), check.getTargetId(),
+                        check.getStatus(), check.getLatencyMs(), check.getDetail(),
+                        check.getCheckedAt()))
+                .toList();
+    }
+
+    /** Counts plus average latency across the fleet, computed in a single pass over the targets. */
+    @Transactional(readOnly = true)
+    public SummaryResponse summary() {
+        List<Target> targets = targetRepository.findAll();
+
+        int up = 0;
+        int down = 0;
+        int unknown = 0;
+        long latencyTotal = 0;
+        int latencySamples = 0;
+
+        for (Target target : targets) {
+            switch (target.getStatus()) {
+                case UP -> up++;
+                case DOWN -> down++;
+                case UNKNOWN -> unknown++;
+            }
+            if (target.getLatencyMs() != null) {
+                latencyTotal += target.getLatencyMs();
+                latencySamples++;
+            }
+        }
+
+        Long average = latencySamples > 0
+                ? Math.round((double) latencyTotal / latencySamples)
+                : null;
+
+        return new SummaryResponse(targets.size(), up, down, unknown, average);
     }
 
     private Target find(long id) {
