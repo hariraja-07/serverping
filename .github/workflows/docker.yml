@@ -1,9 +1,16 @@
-# Builds the image and publishes it to GHCR.
+# Builds the image and publishes it to GHCR, and — on a release — attaches the compose file
+# needed to run it.
 #
-# Two jobs on purpose. The publish job is gated behind `test`, so a commit that breaks the
-# 43-test suite can never ship an image. Building the tests into the image instead would not
+# Three jobs on purpose. The publish job is gated behind `test`, so a commit that breaks the
+# test suite can never ship an image. Building the tests into the image instead would not
 # work either: .dockerignore deliberately excludes src/test/ so the image context stays
 # small and deterministic.
+#
+# The third job exists because of a gap that only showed up while deploying: pulling the
+# image does not get you Postgres, and pulling the compose file out of the repository means
+# cloning a repository that is only source code to you. Attaching `docker-compose.prod.yml`
+# and `.env.example` to the release makes a fresh server's story `gh release download` —
+# two files, no clone, the same token the box already needs for `docker login ghcr.io`.
 #
 # Publishing uses the workflow's own GITHUB_TOKEN rather than a personal token. It expires
 # with the run, needs no secret to be stored anywhere, and — the part that actually matters
@@ -26,10 +33,21 @@ on:
       - '.dockerignore'
       - '.github/workflows/docker.yml'
   # Manual runs ignore `paths`, which is what you want when testing the workflow itself.
+  # `release_tag` is the other use: it re-attaches the compose files to a release that
+  # already exists, so this job can be exercised without cutting a new tag, and so a file
+  # that changes later can be backfilled onto the release it belongs to.
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release to attach docker-compose.prod.yml and .env.example to (blank = skip)'
+        required: false
+        default: ''
 
 # Least privilege the jobs actually need. contents:read is for checkout; packages:write is
-# the only reason this can push to ghcr.io at all.
+# the only reason this can push to ghcr.io at all. Attaching a release asset needs
+# contents:write, which is why release-asset declares its own `permissions:` block below —
+# a job-level block replaces this one for that job rather than adding to it, so the job that
+# uploads a file never also holds the right to push images.
 permissions:
   contents: read
   packages: write
@@ -118,3 +136,58 @@ jobs:
           # not re-run Maven's dependency download (~3 minutes) on every commit.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Attaches the two files a deployed server actually needs. `docker pull` gets the app
+  # image and nothing else — Postgres is a separate image with a separate release cadence,
+  # which is why it is wrong to bundle it — so the app image alone has never been enough to
+  # start a stack. Without this job the only way to get the compose file was to clone the
+  # whole repository, source and all, onto a machine that will never build any of it.
+  #
+  # Gated on both jobs above: the asset is a promise that this file runs this release, and
+  # attaching it after a publish that failed would be the same kind of stale claim as a tag
+  # block documenting tags nothing produced.
+  release-asset:
+    name: attach compose files to release
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve release tag
+        id: tag
+        # Plain shell rather than an expression: a tag push carries the tag in the ref, a
+        # manual run carries it in the input, and `refs/tags/` stripping is clearer to read
+        # here than `startsWith(...) && github.ref_name || inputs.release_tag` would be.
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${RELEASE_TAG_INPUT}" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+
+      - name: Attach files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # The release is created by hand seconds after the tag goes up, while this job
+          # runs minutes later behind two other jobs — so in practice it already exists and
+          # the first attempt succeeds. The retries cover that ordering, not flakiness: if
+          # every attempt fails, the tag was pushed with no release behind it, which is
+          # worth a red run rather than a silent skip.
+          for attempt in 1 2 3 4; do
+            if gh release upload "$RELEASE_TAG" docker-compose.prod.yml .env.example \
+                 --clobber -R "$GITHUB_REPOSITORY"; then
+              echo "attached docker-compose.prod.yml and .env.example to $RELEASE_TAG"
+              exit 0
+            fi
+            echo "attempt $attempt failed — release may not exist yet"
+            sleep 15
+          done
+          echo "::error::could not attach files to release $RELEASE_TAG — does that release exist?"
+          exit 1

@@ -13,7 +13,7 @@ Two ways in. Docker Compose is the shorter one and needs nothing installed but D
 ### With Docker Compose
 
 ```bash
-git clone https://github.com/hariraja-07/serverping.git
+git clone https://github.com/hariraja-07/serverping.git   # private: `gh repo clone`, or a PAT in the URL
 cd serverping
 cp .env.example .env        # defaults are fine for local use
 docker compose up -d
@@ -35,6 +35,9 @@ docker compose up -d
 
 (`up -d` builds rather than pulls when `build:` is present and no image exists locally, so
 pull first if you want the prebuilt one.)
+
+Deploying to a machine that will never build the source at all — the compose file, the
+registry login and why the port stays on loopback: [Deploying to a server](#deploying-to-a-server).
 
 ### Running from source
 
@@ -352,6 +355,83 @@ commit that breaks the test suite can never reach the registry.
 
 ---
 
+## Deploying to a server
+
+`docker pull` gets the app image and nothing else. Postgres is a separate image with its own
+release cadence — bundling it would mean republishing serverping every time Postgres patches
+a CVE — so an image alone has never been enough to start a stack. The compose file is the
+other half, and a machine that will never compile anything should not have to clone a
+repository full of source code just to obtain it.
+
+Every release carries the two files a deployed box needs. On a fresh server with Docker
+installed:
+
+```bash
+# one token does both jobs: `repo` reads this private release, `read:packages` pulls the private image
+export GH_TOKEN=<PAT with repo and read:packages>
+
+gh release download -R hariraja-07/serverping --clobber \
+  -p docker-compose.prod.yml -p .env.example
+
+cp .env.example .env && nano .env   # a real POSTGRES_PASSWORD, before anything is reachable
+echo "$GH_TOKEN" | docker login ghcr.io -u hariraja-07 --password-stdin
+
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml ps      # both services healthy
+curl localhost:8080/actuator/health
+```
+
+No clone, no Maven, no Dockerfile — a token, two files and a pull. Without the GitHub CLI the
+same two files come from the release directly:
+
+```bash
+curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -L \
+  https://github.com/hariraja-07/serverping/releases/latest/download/docker-compose.prod.yml \
+  -o docker-compose.prod.yml     # and the same for .env.example
+```
+
+`docker-compose.prod.yml` is not the dev file with `build:` deleted:
+
+| | `docker-compose.yml` (dev) | `docker-compose.prod.yml` (server) |
+|---|---|---|
+| app image | `build: .` | `image:` from GHCR — there is no Dockerfile on the box |
+| API port | `0.0.0.0:8080` | `127.0.0.1:8080` |
+| Postgres port | `127.0.0.1:5432` | published to no host at all |
+
+Both port differences exist for one reason: **the service has no authentication.** Reach it
+over SSH instead of opening it up:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 user@server   # then curl localhost:8080 from your laptop
+sudo ufw allow OpenSSH && sudo ufw enable # and deliberately never `ufw allow 8080`
+```
+
+Putting a reverse proxy in front is what makes it reachable *on purpose* — which needs
+authentication first, and that is why it is still listed under "Not built yet".
+
+Both files pin `name: serverping`, so they share one `serverping_pgdata` volume and both want
+port 8080: alternative modes of a single stack, never two stacks. Stop one before starting the
+other, and the data follows you either way.
+
+### Updating and operating
+
+```bash
+cd /opt/serverping
+docker compose -f docker-compose.prod.yml logs -f serverping   # tail
+
+# `latest` moves only when a release is cut, so pull is how a new one is picked up
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+
+docker compose -f docker-compose.prod.yml down                 # stop — the data survives
+docker compose -f docker-compose.prod.yml down -v              # deletes every row of history
+docker compose -f docker-compose.prod.yml exec db \
+  pg_dump -U serverping serverping > backup-$(date +%F).sql
+```
+
+---
+
 ## Database and migrations
 
 Flyway owns the schema; Hibernate only checks that what Flyway built still matches the
@@ -423,7 +503,7 @@ at a restored dump. The schema comes from the dump *and* from Flyway — Flyway 
 
 ### Tests do not touch PostgreSQL
 
-The 43-test suite runs on in-memory H2 with Flyway disabled
+The test suite runs on in-memory H2 with Flyway disabled
 (`src/test/resources/application.properties`). H2 is `<scope>test</scope>` in `pom.xml`,
 nothing external has to be running, and the CI test job stays dependency-free — which is the
 reason it completes in well under a minute.
@@ -435,8 +515,9 @@ reason it completes in well under a minute.
 ```
 Dockerfile                       multi-stage: maven build -> JRE runtime
 docker-compose.yml               db + serverping, named volume `pgdata`
+docker-compose.prod.yml          same stack, image pulled from GHCR, loopback only
 .env.example                     credentials template (.env is gitignored)
-.github/workflows/docker.yml     test -> build -> publish to GHCR
+.github/workflows/docker.yml     test -> build -> publish to GHCR (+ compose files on a release)
 
 src/main/resources/
   application.properties         Postgres, Flyway on, ddl-auto=validate
