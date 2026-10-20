@@ -371,9 +371,9 @@ installed:
 export GH_TOKEN=<PAT with repo and read:packages>
 
 gh release download -R hariraja-07/serverping --clobber \
-  -p docker-compose.prod.yml -p .env.example
+  -p docker-compose.prod.yml -p env.example
 
-cp .env.example .env && nano .env   # a real POSTGRES_PASSWORD, before anything is reachable
+cp env.example .env && nano .env    # a real POSTGRES_PASSWORD, before anything is reachable
 echo "$GH_TOKEN" | docker login ghcr.io -u hariraja-07 --password-stdin
 
 docker compose -f docker-compose.prod.yml pull
@@ -382,13 +382,21 @@ docker compose -f docker-compose.prod.yml ps      # both services healthy
 curl localhost:8080/actuator/health
 ```
 
-No clone, no Maven, no Dockerfile — a token, two files and a pull. Without the GitHub CLI the
-same two files come from the release directly:
+No clone, no Maven, no Dockerfile — a token, two files and a pull.
+
+The credentials template is `env.example` on the release rather than `.env.example`, because
+GitHub will not keep a leading dot on a release asset: the upload is silently stored as
+`default.env.example`, and a download asking for `.env.example` matches nothing *and still
+exits 0*. The bytes are identical to the file in the repository; only the name differs. One
+consequence worth knowing: `--clobber` above replaces the two files this release shipped with
+and nothing else, so re-running the download cannot overwrite your `.env`.
+
+Without the GitHub CLI the same two files come from the release directly:
 
 ```bash
 curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -L \
   https://github.com/hariraja-07/serverping/releases/latest/download/docker-compose.prod.yml \
-  -o docker-compose.prod.yml     # and the same for .env.example
+  -o docker-compose.prod.yml     # and the same path with env.example for the template
 ```
 
 `docker-compose.prod.yml` is not the dev file with `build:` deleted:

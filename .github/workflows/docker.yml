@@ -9,7 +9,7 @@
 # The third job exists because of a gap that only showed up while deploying: pulling the
 # image does not get you Postgres, and pulling the compose file out of the repository means
 # cloning a repository that is only source code to you. Attaching `docker-compose.prod.yml`
-# and `.env.example` to the release makes a fresh server's story `gh release download` —
+# and `env.example` to the release makes a fresh server's story `gh release download` —
 # two files, no clone, the same token the box already needs for `docker login ghcr.io`.
 #
 # Publishing uses the workflow's own GITHUB_TOKEN rather than a personal token. It expires
@@ -39,7 +39,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release to attach docker-compose.prod.yml and .env.example to (blank = skip)'
+        description: 'Release to attach docker-compose.prod.yml and env.example to (blank = skip)'
         required: false
         default: ''
 
@@ -175,15 +175,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          # The template cannot keep its name. GitHub rejects a release asset beginning with
+          # a dot: uploading `.env.example` lands on the release as `default.env.example`,
+          # and `gh release download -p .env.example` then matches nothing — and still exits
+          # 0. A server following the README would have downloaded one file instead of two
+          # and died later at `cp .env.example .env`, with nothing above it to explain why.
+          # Confirmed on the raw API too: a second upload named `.env.example` is rejected
+          # as already_exists, so this is GitHub's rule, not the CLI's.
+          #
+          # The release carries the template as `env.example` instead. Same bytes, same
+          # purpose, one name that survives the round trip.
+          cp .env.example env.example
+
           # The release is created by hand seconds after the tag goes up, while this job
           # runs minutes later behind two other jobs — so in practice it already exists and
           # the first attempt succeeds. The retries cover that ordering, not flakiness: if
           # every attempt fails, the tag was pushed with no release behind it, which is
           # worth a red run rather than a silent skip.
           for attempt in 1 2 3 4; do
-            if gh release upload "$RELEASE_TAG" docker-compose.prod.yml .env.example \
+            if gh release upload "$RELEASE_TAG" docker-compose.prod.yml env.example \
                  --clobber -R "$GITHUB_REPOSITORY"; then
-              echo "attached docker-compose.prod.yml and .env.example to $RELEASE_TAG"
+              echo "attached docker-compose.prod.yml and env.example to $RELEASE_TAG"
               exit 0
             fi
             echo "attempt $attempt failed — release may not exist yet"
