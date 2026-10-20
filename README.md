@@ -367,6 +367,8 @@ Every release carries the two files a deployed box needs. On a fresh server with
 installed:
 
 ```bash
+mkdir -p /opt/serverping && cd /opt/serverping
+
 # one token does both jobs: `repo` reads this private release, `read:packages` pulls the private image
 export GH_TOKEN=<PAT with repo and read:packages>
 
@@ -382,14 +384,17 @@ docker compose -f docker-compose.prod.yml ps      # both services healthy
 curl localhost:8080/actuator/health
 ```
 
-No clone, no Maven, no Dockerfile — a token, two files and a pull.
+No clone, no Maven, no Dockerfile — a token, two files and a pull. Every variable has a
+default inside the compose file, so a forgotten `.env` still starts the stack — with the
+password `serverping`. The API being on loopback is the only reason that is survivable, so
+the `nano` line is not a suggestion.
 
 The credentials template is `env.example` on the release rather than `.env.example`, because
 GitHub will not keep a leading dot on a release asset: the upload is silently stored as
 `default.env.example`, and a download asking for `.env.example` matches nothing *and still
-exits 0*. The bytes are identical to the file in the repository; only the name differs. One
-consequence worth knowing: `--clobber` above replaces the two files this release shipped with
-and nothing else, so re-running the download cannot overwrite your `.env`.
+exits 0*. The bytes are identical to the file in the repository; only the name differs.
+`--clobber` above only replaces *local* files that share a name with those two assets, so
+re-running the download cannot touch the `.env` you made from the template.
 
 Without the GitHub CLI the same two files come from the release directly:
 
